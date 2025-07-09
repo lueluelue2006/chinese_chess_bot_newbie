@@ -333,6 +333,7 @@
             <div class="button-row">
                 <button id="mode-button" class="game-button">模式: 人-人</button>
                 <button id="reset-button" class="game-button">新 开 局</button>
+                <button id="undo-button" class="game-button">悔 棋</button>
             </div>
         </div>
 
@@ -349,9 +350,40 @@
         const SEARCH_DEPTH = 4; // 搜索深度: 2=快但弱, 3=中等, 4=慢但较强(可能卡顿10s+), 5=非常慢
         const QUIESCENCE_DEPTH = 4; // 静态搜索深度
         const AI_DELAY = 150; // AI开始思考前的延迟ms，确保人类落子画面刷新
-        const PIECE_VALUES = {
-            'R': 900, 'H': 400, 'E': 200, 'A': 210, 'G': 20000, 'C': 450, 'S': 100,
+        
+        // 开局阶段棋子价值（前10回合）
+        const OPENING_VALUES = {
+            'G': 20000,
+            'R': 1000,
+            'C': 600,
+            'H': 500,
+            'E': 100,
+            'A': 100,
+            'S': 100, // 默认值，具体根据位置调整
         };
+        
+        // 中局阶段棋子价值（原始值）
+        const MIDGAME_VALUES = {
+            'G': 20000,
+            'R': 900,
+            'C': 450,
+            'H': 400,
+            'E': 150,
+            'A': 150,
+            'S': 100,
+        };
+        
+        // 残局阶段棋子价值（双方大子都少于3个）
+        const ENDGAME_VALUES = {
+            'G': 20000,
+            'R': 1500,
+            'C': 550,
+            'H': 700,
+            'E': 250,
+            'A': 250,
+            'S': 150,
+        };
+        
         const SOLDIER_CROSS_RIVER_BONUS = 80;
         
         // Position value tables for each piece type
@@ -459,6 +491,7 @@
         const infoDiv = document.getElementById('info');
         const resetButton = document.getElementById('reset-button');
         const modeButton = document.getElementById('mode-button');
+        const undoButton = document.getElementById('undo-button');
         const fullscreenButton = document.getElementById('fullscreen-button');
         const rootStyle = getComputedStyle(document.documentElement);
         const PIECE_FONT_FAMILY = rootStyle.getPropertyValue('--piece-font').trim();
@@ -493,6 +526,8 @@
         let gameMode = 'PVP'; // 'PVP', 'PVAI', 'AIVP'
         let aiColor = 'black'; //
         let isAiThinking = false; //
+        let gameStateHistory = []; // 游戏状态历史记录，用于悔棋
+        let isBoardFlipped = false; // 棋盘是否翻转
 
         const getPiece = (x, y, board = boardData) => (isValidCoord(x, y) ? board[y]?.[x] : null);
         const isEmpty = (x, y, board = boardData) => (isValidCoord(x, y) && board[y]?.[x] === null);
@@ -504,6 +539,22 @@
         const isRedSide = (y) => y >= 5;
         const isBlackSide = (y) => y <= 4;
         const copyBoard = (board) => board.map(row => [...row]);
+        
+        // 获取视觉坐标（考虑棋盘翻转）
+        const getVisualCoords = (x, y) => {
+            if (isBoardFlipped) {
+                return { x: 8 - x, y: 9 - y };
+            }
+            return { x, y };
+        };
+        
+        // 从视觉坐标转换为逻辑坐标
+        const getLogicalCoords = (visualX, visualY) => {
+            if (isBoardFlipped) {
+                return { x: 8 - visualX, y: 9 - visualY };
+            }
+            return { x: visualX, y: visualY };
+        };
 
         // ++++ 核心修改：根据布局计算尺寸 ++++
         function setupBoardDimensions() {
@@ -568,8 +619,12 @@
             ctx.clearRect(0, 0, canvasWidth, canvasHeight);
             ctx.fillStyle = BOARD_BG_COLOR;
             ctx.fillRect(0, 0, canvasWidth, canvasHeight);
+            
+            // 河界位置根据翻转调整
+            const riverY = isBoardFlipped ? 5 : 4;
             ctx.fillStyle = RIVER_BG;
-            ctx.fillRect(margin, margin + 4 * cellSize, cellSize * (COLS - 1), cellSize);
+            ctx.fillRect(margin, margin + riverY * cellSize, cellSize * (COLS - 1), cellSize);
+            
             ctx.strokeStyle = BOARD_LINE_COLOR;
             ctx.lineWidth = Math.max(1, Math.round(cellSize * 0.025 * dpr) / dpr);
             const gridWidth = cellSize * (COLS - 1);
@@ -577,10 +632,10 @@
             ctx.save();
             ctx.font = `bold ${Math.max(12, cellSize * 0.5)}px ${PIECE_FONT_FAMILY}`;
             ctx.fillStyle = RIVER_COLOR; ctx.textAlign = "center"; ctx.textBaseline = "middle";
-            const riverY = margin + 4.5 * cellSize;
+            const riverTextY = margin + (riverY + 0.5) * cellSize;
              // 根据宽度调整文字
              const riverText = (cellSize < 35) ? "楚 河 漢 界" : "楚  河         漢  界";
-            ctx.fillText(riverText, margin + gridWidth / 2, riverY);
+            ctx.fillText(riverText, margin + gridWidth / 2, riverTextY);
             ctx.restore();
 
             for (let i = 1; i < ROWS - 1; i++) {
@@ -604,13 +659,36 @@
             ctx.strokeRect(margin - ctx.lineWidth / 2, margin - ctx.lineWidth / 2, gridWidth + ctx.lineWidth, gridHeight + ctx.lineWidth); // 画在外围
             ctx.restore();
 
-            drawCross(3, 0, 5, 2); drawCross(3, 7, 5, 9);
+            // 画九宫格（考虑翻转）
+            if (isBoardFlipped) {
+                drawCross(3, 7, 5, 9); // 红方九宫格位置翻转
+                drawCross(3, 0, 5, 2); // 黑方九宫格位置翻转
+            } else {
+                drawCross(3, 0, 5, 2); // 黑方九宫格
+                drawCross(3, 7, 5, 9); // 红方九宫格
+            }
+            
             const markerLineWidth = Math.max(0.8, Math.round(cellSize * 0.018 * dpr) / dpr);
             ctx.lineWidth = markerLineWidth;
-            drawMarker(1, 2); drawMarker(7, 2); drawMarker(1, 7); drawMarker(7, 7);
+            
+            // 炮位标记（考虑翻转）
+            if (isBoardFlipped) {
+                drawMarker(1, 7); drawMarker(7, 7); // 原本的(1,2)和(7,2)
+                drawMarker(1, 2); drawMarker(7, 2); // 原本的(1,7)和(7,7)
+            } else {
+                drawMarker(1, 2); drawMarker(7, 2);
+                drawMarker(1, 7); drawMarker(7, 7);
+            }
+            
+            // 兵位标记
             for (let i = 0; i <= 8; i += 2) {
-                drawMarker(i, 3, i > 0, i < COLS - 1);
-                drawMarker(i, 6, i > 0, i < COLS - 1);
+                if (isBoardFlipped) {
+                    drawMarker(i, 6, i > 0, i < COLS - 1); // 原本的3行
+                    drawMarker(i, 3, i > 0, i < COLS - 1); // 原本的6行
+                } else {
+                    drawMarker(i, 3, i > 0, i < COLS - 1);
+                    drawMarker(i, 6, i > 0, i < COLS - 1);
+                }
             }
         }
         function drawCross(x1, y1, x2, y2) {
@@ -644,27 +722,35 @@
         function render() {
             piecesLayer.innerHTML = '';
             if (lastMove) {
-                const fromPos = { x: lastMove.fromX, y: lastMove.fromY };
+                const fromPos = getVisualCoords(lastMove.fromX, lastMove.fromY);
                 if (isValidCoord(fromPos.x, fromPos.y)) {
                     const indicator = document.createElement('div');
                     indicator.className = 'last-move-indicator';
-                    indicator.style.left = `${margin + fromPos.x * cellSize}px`; indicator.style.top = `${margin + fromPos.y * cellSize}px`;
+                    indicator.style.left = `${margin + fromPos.x * cellSize}px`; 
+                    indicator.style.top = `${margin + fromPos.y * cellSize}px`;
                     piecesLayer.appendChild(indicator);
                 }
-                const toPos = { x: lastMove.toX, y: lastMove.toY };
+                const toPos = getVisualCoords(lastMove.toX, lastMove.toY);
                 if (isValidCoord(toPos.x, toPos.y)) {
                     const indicator = document.createElement('div');
                     indicator.className = 'last-move-indicator to-indicator';
-                    indicator.style.left = `${margin + toPos.x * cellSize}px`; indicator.style.top = `${margin + toPos.y * cellSize}px`;
+                    indicator.style.left = `${margin + toPos.x * cellSize}px`; 
+                    indicator.style.top = `${margin + toPos.y * cellSize}px`;
                     piecesLayer.appendChild(indicator);
                 }
             }
             if (!isAiThinking && !(gameMode !== 'PVP' && currentPlayer === aiColor)) {
                 possibleMoves.forEach(move => {
+                    const visualPos = getVisualCoords(move.x, move.y);
                     if (isEmpty(move.x, move.y)) {
-                        const dot = document.createElement('div'); dot.classList.add('highlight-dot');
-                        dot.style.left = `${margin + move.x * cellSize}px`; dot.style.top = `${margin + move.y * cellSize}px`;
-                        dot.onclick = (event) => { event.stopPropagation(); handleClick(move.x, move.y); };
+                        const dot = document.createElement('div'); 
+                        dot.classList.add('highlight-dot');
+                        dot.style.left = `${margin + visualPos.x * cellSize}px`; 
+                        dot.style.top = `${margin + visualPos.y * cellSize}px`;
+                        dot.onclick = (event) => { 
+                            event.stopPropagation(); 
+                            handleClick(move.x, move.y); 
+                        };
                         piecesLayer.appendChild(dot);
                     }
                 });
@@ -674,15 +760,24 @@
                 for (let x = 0; x < COLS; x++) {
                     const pieceCode = boardData[y][x];
                     if (pieceCode) {
+                        const visualPos = getVisualCoords(x, y);
                         const pieceDiv = document.createElement('div');
                         pieceDiv.className = `piece ${COLOR_MAP[pieceCode[0]]}`;
                         pieceDiv.textContent = PIECE_MAP[pieceCode];
-                        pieceDiv.style.left = `${margin + x * cellSize}px`; pieceDiv.style.top = `${margin + y * cellSize}px`;
+                        pieceDiv.style.left = `${margin + visualPos.x * cellSize}px`; 
+                        pieceDiv.style.top = `${margin + visualPos.y * cellSize}px`;
                         if (!isAiThinking && !(gameMode !== 'PVP' && currentPlayer === aiColor)) {
-                            if (selectedPiece && selectedPiece.x === x && selectedPiece.y === y) { pieceDiv.classList.add('selected'); }
-                            if (possibleMoves.some(move => move.x === x && move.y === y)) { pieceDiv.classList.add('possible-capture'); }
+                            if (selectedPiece && selectedPiece.x === x && selectedPiece.y === y) { 
+                                pieceDiv.classList.add('selected'); 
+                            }
+                            if (possibleMoves.some(move => move.x === x && move.y === y)) { 
+                                pieceDiv.classList.add('possible-capture'); 
+                            }
                         }
-                        pieceDiv.onclick = (event) => { event.stopPropagation(); handleClick(x, y); };
+                        pieceDiv.onclick = (event) => { 
+                            event.stopPropagation(); 
+                            handleClick(x, y); 
+                        };
                         piecesLayer.appendChild(pieceDiv);
                     }
                 }
@@ -731,8 +826,13 @@
             moveHistory = []; // Reset move history
             killerMoves = Array(10).fill(null).map(() => [null, null]); // Reset killer moves
             historyTable = {}; // Reset history table
+            gameStateHistory = []; // Reset undo history
             infoDiv.style.color = RED_COLOR; infoDiv.classList.remove('info-check');
             infoDiv.textContent = '红方先行';
+            
+            // 保存初始状态
+            saveGameState();
+            
             refreshBoard();
             if (gameMode === 'AIVP' && currentPlayer === 'red') {
                 triggerAIMove();
@@ -783,7 +883,67 @@
             possibleMoves = rawMoves.filter(move => isMoveLegal(x, y, move.x, move.y, copyBoard(boardData), currentPlayer, redGeneralPos, blackGeneralPos)); // AI needs copy
         }
 
+        function saveGameState() {
+            // 保存当前游戏状态
+            const state = {
+                boardData: copyBoard(boardData),
+                currentPlayer: currentPlayer,
+                redGeneralPos: { ...redGeneralPos },
+                blackGeneralPos: { ...blackGeneralPos },
+                lastMove: lastMove ? { ...lastMove } : null,
+                moveHistory: [...moveHistory],
+                isGameOver: isGameOver
+            };
+            gameStateHistory.push(state);
+            
+            // 限制历史记录长度，避免内存过大
+            if (gameStateHistory.length > 100) {
+                gameStateHistory.shift();
+            }
+        }
+        
+        function undoMove() {
+            if (isAiThinking || gameStateHistory.length === 0) return;
+            
+            // 人机对战模式下，需要撤回两步（AI和玩家的）
+            let undoSteps = 1;
+            if (gameMode !== 'PVP' && gameStateHistory.length > 1) {
+                // 检查上一步是否是AI走的
+                const lastState = gameStateHistory[gameStateHistory.length - 1];
+                if (lastState.currentPlayer !== aiColor) {
+                    undoSteps = 2; // 撤回AI和玩家的两步
+                }
+            }
+            
+            // 执行撤回
+            for (let i = 0; i < undoSteps && gameStateHistory.length > 0; i++) {
+                gameStateHistory.pop();
+            }
+            
+            if (gameStateHistory.length > 0) {
+                // 恢复到之前的状态
+                const previousState = gameStateHistory[gameStateHistory.length - 1];
+                boardData = copyBoard(previousState.boardData);
+                currentPlayer = previousState.currentPlayer;
+                redGeneralPos = { ...previousState.redGeneralPos };
+                blackGeneralPos = { ...previousState.blackGeneralPos };
+                lastMove = previousState.lastMove ? { ...previousState.lastMove } : null;
+                moveHistory = [...previousState.moveHistory];
+                isGameOver = previousState.isGameOver;
+                
+                selectedPiece = null;
+                possibleMoves = [];
+                render();
+            } else {
+                // 如果没有历史记录了，重新开始
+                initGame();
+            }
+        }
+        
         function movePiece(fromX, fromY, toX, toY) {
+            // 在移动前保存状态
+            saveGameState();
+            
             const movingPiece = boardData[fromY][fromX];
             const targetPiece = boardData[toY][toX];
             lastMove = { fromX, fromY, toX, toY };
@@ -855,10 +1015,102 @@
         function getRawMoves(x, y, pieceCode, board) { let moves = []; if (!pieceCode) return moves; const color = pieceCode[0]; const type = pieceCode[1]; const targetColor = COLOR_MAP[color]; const addMove = (nx, ny) => { if (!isValidCoord(nx, ny)) return false; const target = getPiece(nx, ny, board); if (!target) { moves.push({ x: nx, y: ny }); return true; } else if (target[0] !== color) { moves.push({ x: nx, y: ny }); return false; } return false; }; const checkAndAdd = (nx, ny) => { if (isValidCoord(nx, ny) && !isAlly(nx, ny, targetColor, board)) { moves.push({ x: nx, y: ny }); } }; switch (type) { case 'R': const directions = [[0, -1], [0, 1], [-1, 0], [1, 0]]; directions.forEach(([dx, dy]) => { for (let i = 1; i < Math.max(ROWS, COLS); i++) { const nx = x + i * dx, ny = y + i * dy; if (!isValidCoord(nx, ny) || !addMove(nx, ny)) break; } }); break; case 'C': const dirs = [[0, -1], [0, 1], [-1, 0], [1, 0]]; dirs.forEach(([dx, dy]) => { let hasMount = false; for (let i = 1; i < Math.max(ROWS, COLS); i++) { const nx = x + i * dx; const ny = y + i * dy; if (!isValidCoord(nx, ny)) break; const target = getPiece(nx, ny, board); if (!hasMount) { if (!target) moves.push({ x: nx, y: ny }); else hasMount = true; } else { if (target) { if (target[0] !== color) moves.push({ x: nx, y: ny }); break; } } } }); break; case 'H': const horseSteps = [{ move: [1, 2], leg: [0, 1] }, { move: [1, -2], leg: [0, -1] }, { move: [-1, 2], leg: [0, 1] }, { move: [-1, -2], leg: [0, -1] }, { move: [2, 1], leg: [1, 0] }, { move: [2, -1], leg: [1, 0] }, { move: [-2, 1], leg: [-1, 0] }, { move: [-2, -1], leg: [-1, 0] }]; horseSteps.forEach(({ move, leg }) => { const legX = x + leg[0], legY = y + leg[1]; if (isValidCoord(legX, legY) && isEmpty(legX, legY, board)) { checkAndAdd(x + move[0], y + move[1]); } }); break; case 'E': const eleSteps = [{ move: [2, 2], eye: [1, 1] }, { move: [2, -2], eye: [1, -1] }, { move: [-2, 2], eye: [-1, 1] }, { move: [-2, -2], eye: [-1, -1] }]; eleSteps.forEach(({ move, eye }) => { const nx = x + move[0], ny = y + move[1]; if ((color === 'r' && !isRedSide(ny)) || (color === 'b' && !isBlackSide(ny))) return; if (!isValidCoord(nx, ny)) return; const eyeX = x + eye[0], eyeY = y + eye[1]; if (isValidCoord(eyeX, eyeY) && isEmpty(eyeX, eyeY, board)) { checkAndAdd(nx, ny); } }); break; case 'A': const advMoves = [[1, 1], [1, -1], [-1, 1], [-1, -1]]; advMoves.forEach(([dx, dy]) => { const nx = x + dx, ny = y + dy; const inPalace = (color === 'r' && isRedPalace(nx, ny)) || (color === 'b' && isBlackPalace(nx, ny)); if (inPalace) checkAndAdd(nx, ny); }); break; case 'G': const genMoves = [[0, 1], [0, -1], [1, 0], [-1, 0]]; genMoves.forEach(([dx, dy]) => { const nx = x + dx, ny = y + dy; const inPalace = (color === 'r' && isRedPalace(nx, ny)) || (color === 'b' && isBlackPalace(nx, ny)); if (inPalace) checkAndAdd(nx, ny); }); break; case 'S': if (color === 'r') { checkAndAdd(x, y - 1); if (!isRedSide(y)) { checkAndAdd(x - 1, y); checkAndAdd(x + 1, y); } } else { checkAndAdd(x, y + 1); if (!isBlackSide(y)) { checkAndAdd(x - 1, y); checkAndAdd(x + 1, y); } } break; } return moves; }
 
         // ================== AI LOGIC START ==================
+        
+        // 判断游戏阶段
+        function getGamePhase(board) {
+            // 计算回合数
+            const totalMoves = moveHistory.length;
+            if (totalMoves < 20) { // 前10个回合（每方10步）
+                return 'opening';
+            }
+            
+            // 计算双方大子数量
+            let redMajorPieces = 0;
+            let blackMajorPieces = 0;
+            
+            for (let y = 0; y < ROWS; y++) {
+                for (let x = 0; x < COLS; x++) {
+                    const piece = board[y][x];
+                    if (!piece) continue;
+                    const type = piece[1];
+                    if (type === 'R' || type === 'H' || type === 'C') {
+                        if (piece[0] === 'r') {
+                            redMajorPieces++;
+                        } else {
+                            blackMajorPieces++;
+                        }
+                    }
+                }
+            }
+            
+            // 如果双方大子都少于3个，进入残局
+            if (redMajorPieces < 3 && blackMajorPieces < 3) {
+                return 'endgame';
+            }
+            
+            return 'midgame';
+        }
+        
+        // 获取棋子价值
+        function getPieceValue(type, x, y, colorChar, gamePhase) {
+            let baseValue = 0;
+            
+            // 根据游戏阶段选择基础价值
+            switch (gamePhase) {
+                case 'opening':
+                    baseValue = OPENING_VALUES[type] || 0;
+                    // 开局阶段兵的特殊价值
+                    if (type === 'S') {
+                        if (x === 0 || x === 8) {
+                            baseValue = 100; // 边兵
+                        } else if (x === 2 || x === 6) {
+                            baseValue = 130; // 3路和7路兵
+                        } else if (x === 4) {
+                            baseValue = 160; // 中兵
+                        }
+                    }
+                    break;
+                case 'midgame':
+                    baseValue = MIDGAME_VALUES[type] || 0;
+                    break;
+                case 'endgame':
+                    baseValue = ENDGAME_VALUES[type] || 0;
+                    break;
+            }
+            
+            return baseValue;
+        }
+        
+        // 计算士象完整奖励
+        function getAdvisorElephantBonus(board, colorChar, gamePhase) {
+            let advisorCount = 0;
+            let elephantCount = 0;
+            
+            for (let y = 0; y < ROWS; y++) {
+                for (let x = 0; x < COLS; x++) {
+                    const piece = board[y][x];
+                    if (piece && piece[0] === colorChar) {
+                        if (piece[1] === 'A') advisorCount++;
+                        if (piece[1] === 'E') elephantCount++;
+                    }
+                }
+            }
+            
+            // 中局阶段：士象都完整有100分奖励
+            if (gamePhase === 'midgame' && advisorCount === 2 && elephantCount === 2) {
+                return 100;
+            }
+            
+            return 0;
+        }
+        
         function evaluateBoard(board, rG, bG) {
             let score = 0;
             if (!getPiece(rG.x, rG.y, board)) return -50000;
             if (!getPiece(bG.x, bG.y, board)) return 50000;
+            
+            // 获取当前游戏阶段
+            const gamePhase = getGamePhase(board);
             
             // Material and position evaluation
             for (let y = 0; y < ROWS; y++) {
@@ -867,7 +1119,9 @@
                     if (!piece) continue;
                     const colorChar = piece[0];
                     const type = piece[1];
-                    let pieceValue = PIECE_VALUES[type] || 0;
+                    
+                    // 获取基于游戏阶段的棋子价值
+                    let pieceValue = getPieceValue(type, x, y, colorChar, gamePhase);
                     
                     // Add position value
                     if (POSITION_VALUES[type]) {
@@ -919,6 +1173,10 @@
                     }
                 }
             }
+            
+            // 添加士象完整奖励
+            score += getAdvisorElephantBonus(board, 'r', gamePhase);
+            score -= getAdvisorElephantBonus(board, 'b', gamePhase);
             
             // Endgame adjustments
             const pieceCount = board.flat().filter(p => p !== null).length;
@@ -1017,9 +1275,12 @@
                             const targetPiece = getPiece(move.x, move.y, board);
                             if (targetPiece && targetPiece[0] !== colorChar) {
                                 if (isMoveLegal(x, y, move.x, move.y, copyBoard(board), color, rG, bG)) {
-                                    moves.push({ 
+                                    // 使用当前阶段的棋子价值
+                                    const gamePhase = getGamePhase(board);
+                                    const captureValue = getPieceValue(targetPiece[1], move.x, move.y, targetPiece[0], gamePhase);
+                                    moves.push({
                                         fromX: x, fromY: y, toX: move.x, toY: move.y,
-                                        captureValue: PIECE_VALUES[targetPiece[1]] || 0
+                                        captureValue: captureValue
                                     });
                                 }
                             }
@@ -1054,9 +1315,9 @@
                 for (let i = 0; i < 2; i++) {
                     const killer = killerMoves[depth][i];
                     if (killer) {
-                        if (a.fromX === killer.fromX && a.fromY === killer.fromY && 
+                        if (a.fromX === killer.fromX && a.fromY === killer.fromY &&
                             a.toX === killer.toX && a.toY === killer.toY) return -1;
-                        if (b.fromX === killer.fromX && b.fromY === killer.fromY && 
+                        if (b.fromX === killer.fromX && b.fromY === killer.fromY &&
                             b.toX === killer.toX && b.toY === killer.toY) return 1;
                     }
                 }
@@ -1071,8 +1332,9 @@
                 // Capture ordering
                 const targetA = getPiece(a.toX, a.toY, board);
                 const targetB = getPiece(b.toX, b.toY, board);
-                const valueA = targetA ? (PIECE_VALUES[targetA[1]] || 0) : 0;
-                const valueB = targetB ? (PIECE_VALUES[targetB[1]] || 0) : 0;
+                const gamePhase = getGamePhase(board);
+                const valueA = targetA ? getPieceValue(targetA[1], a.toX, a.toY, targetA[0], gamePhase) : 0;
+                const valueB = targetB ? getPieceValue(targetB[1], b.toX, b.toY, targetB[0], gamePhase) : 0;
                 return valueB - valueA;
             });
 
@@ -1085,10 +1347,10 @@
                         maxEval = evaluation;
                         if (evaluation >= beta) {
                             // Update killer moves
-                            if (!killerMoves[depth][0] || 
-                                killerMoves[depth][0].fromX !== move.fromX || 
+                            if (!killerMoves[depth][0] ||
+                                killerMoves[depth][0].fromX !== move.fromX ||
                                 killerMoves[depth][0].fromY !== move.fromY ||
-                                killerMoves[depth][0].toX !== move.toX || 
+                                killerMoves[depth][0].toX !== move.toX ||
                                 killerMoves[depth][0].toY !== move.toY) {
                                 killerMoves[depth][1] = killerMoves[depth][0];
                                 killerMoves[depth][0] = move;
@@ -1111,10 +1373,10 @@
                         minEval = evaluation;
                         if (evaluation <= alpha) {
                             // Update killer moves
-                            if (!killerMoves[depth][0] || 
-                                killerMoves[depth][0].fromX !== move.fromX || 
+                            if (!killerMoves[depth][0] ||
+                                killerMoves[depth][0].fromX !== move.fromX ||
                                 killerMoves[depth][0].fromY !== move.fromY ||
-                                killerMoves[depth][0].toX !== move.toX || 
+                                killerMoves[depth][0].toX !== move.toX ||
                                 killerMoves[depth][0].toY !== move.toY) {
                                 killerMoves[depth][1] = killerMoves[depth][0];
                                 killerMoves[depth][0] = move;
@@ -1199,6 +1461,20 @@
         }
         // ================== AI LOGIC END ==================
 
+        function updateModeAndBoard() {
+            // 根据游戏模式决定是否翻转棋盘
+            // 人机对战时，如果用户执黑（AI执红），需要翻转棋盘让用户在下方
+            if (gameMode === 'PVAI' && aiColor === 'red') {
+                isBoardFlipped = true;
+            } else {
+                // 其他所有情况都不翻转
+                // PVP模式：不翻转
+                // PVAI且AI执黑：用户执红在下方，不需要翻转
+                // AIVP模式：AI先手但用户还是在正确的位置，不需要翻转
+                isBoardFlipped = false;
+            }
+        }
+        
         function updateModeButtonText() {
             if (gameMode === 'PVP') modeButton.textContent = "模式: 👤 vs 👤";
             if (gameMode === 'PVAI') modeButton.textContent = `模式: 👤 vs 💻(${COLOR_NAME[aiColor]})`;
@@ -1209,7 +1485,11 @@
             if (gameMode === 'PVP') {
                 gameMode = 'PVAI';
                 aiColor = 'black';
-            } else if (gameMode === 'PVAI') {
+            } else if (gameMode === 'PVAI' && aiColor === 'black') {
+                // 切换到用户执黑，AI执红
+                gameMode = 'PVAI';
+                aiColor = 'red';
+            } else if (gameMode === 'PVAI' && aiColor === 'red') {
                 gameMode = 'AIVP';
                 aiColor = 'red';
             } else {
@@ -1217,6 +1497,7 @@
                 aiColor = '';
             }
             updateModeButtonText();
+            updateModeAndBoard();
             initGame();
         });
       
@@ -1280,6 +1561,10 @@
             if (isAiThinking) return;
             initGame();
         });
+        
+        undoButton.addEventListener('click', () => {
+            undoMove();
+        });
 
         window.addEventListener('resize', () => {
            // if (isCurrentlyFullscreen()) return; // 全屏切换由 fullscreenchange 事件处理, 但resize也会触发，保留并用debounce
@@ -1289,6 +1574,7 @@
 
         document.addEventListener('DOMContentLoaded', () => {
             updateModeButtonText();
+            updateModeAndBoard();
             initGame();
         });
 
