@@ -1164,14 +1164,24 @@ const HTML_TEMPLATE = `
             boardData[toY][toX] = movingPiece;
             boardData[fromY][fromX] = null;
             
-            // Track move history
-            moveHistory.push({ fromX, fromY, toX, toY });
-
+            // 更新将帅位置（如果移动的是将帅）
             if (movingPiece && movingPiece[1] === 'G') {
                 const color = movingPiece[0] === 'r' ? 'red' : 'black';
                 if (color === 'red') redGeneralPos = { x: toX, y: toY };
                 else blackGeneralPos = { x: toX, y: toY };
             }
+
+            // 检查这步棋是否造成将军
+            const movingColor = movingPiece[0] === 'r' ? 'red' : 'black';
+            const opponentColor = movingColor === 'red' ? 'black' : 'red';
+            const causesCheck = isGeneralInCheck(opponentColor, boardData, redGeneralPos, blackGeneralPos);
+            
+            // Track move history with check information
+            moveHistory.push({ 
+                fromX, fromY, toX, toY, 
+                piece: movingPiece,
+                causesCheck: causesCheck
+            });
 
             if (targetPiece && targetPiece[1] === 'G') {
                 isGameOver = true;
@@ -1519,10 +1529,64 @@ const HTML_TEMPLATE = `
             return { board: newBoard, rG: newRG, bG: newBG };
         }
 
+        // 检查连续将军次数
+        function checkContinuousChecks(colorChar) {
+            if (moveHistory.length < 8) return 0;
+            
+            let continuousCount = 0;
+            let lastPiece = null;
+            let lastFromX = -1;
+            let lastFromY = -1;
+            
+            // 从最近的移动开始向前检查
+            for (let i = moveHistory.length - 1; i >= 0 && i >= moveHistory.length - 16; i--) {
+                const move = moveHistory[i];
+                if (!move.piece || move.piece[0] !== colorChar) {
+                    break; // 不是该颜色的棋子，中断
+                }
+                
+                if (move.causesCheck) {
+                    // 检查是否是同一个棋子连续将军
+                    if (lastPiece === null || 
+                        (move.piece === lastPiece && 
+                         move.toX === lastFromX && 
+                         move.toY === lastFromY)) {
+                        continuousCount++;
+                        lastPiece = move.piece;
+                        lastFromX = move.fromX;
+                        lastFromY = move.fromY;
+                    } else {
+                        break; // 不是同一个棋子，中断
+                    }
+                } else {
+                    break; // 没有将军，中断
+                }
+            }
+            
+            return continuousCount;
+        }
+
         function evaluateBoard(board, rG, bG) {
             let score = 0;
             if (!getPiece(rG.x, rG.y, board)) return -50000;
             if (!getPiece(bG.x, bG.y, board)) return 50000;
+            
+            // 检查长将惩罚
+            const redContinuousChecks = checkContinuousChecks('r');
+            const blackContinuousChecks = checkContinuousChecks('b');
+            
+            // 长将惩罚机制：1-4次不惩罚，5-7次递增惩罚，8次判负
+            function getCheckPenalty(checkCount) {
+                if (checkCount <= 4) return 0;        // 1-4次不惩罚
+                if (checkCount === 5) return 500;     // 第5次惩罚500分
+                if (checkCount === 6) return 2000;    // 第6次惩罚2000分
+                if (checkCount === 7) return 5000;    // 第7次惩罚5000分
+                if (checkCount >= 8) return 20000;    // 8次或以上判负
+                return 0;
+            }
+            
+            score -= getCheckPenalty(redContinuousChecks);
+            score += getCheckPenalty(blackContinuousChecks);
             
             // 获取当前游戏阶段
             const gamePhase = getGamePhase(board);
