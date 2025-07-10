@@ -780,7 +780,7 @@ const HTML_TEMPLATE = `
             ctx.fillRect(0, 0, canvasWidth, canvasHeight);
 
             // 河界（根据棋盘翻转调整）
-            const riverY = isBoardFlipped ? 5 : 4;
+            const riverY = isBoardFlipped ? 4 : 4;  // 河界永远在第4行
             ctx.fillStyle = RIVER_BG;
             ctx.fillRect(margin, margin + riverY * cellSize, cellSize * (COLS - 1), cellSize);
 
