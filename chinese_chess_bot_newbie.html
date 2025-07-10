@@ -620,8 +620,8 @@
             ctx.fillStyle = BOARD_BG_COLOR;
             ctx.fillRect(0, 0, canvasWidth, canvasHeight);
             
-            // 河界位置根据翻转调整
-            const riverY = isBoardFlipped ? 5 : 4;
+            // 河界位置永远在中间
+            const riverY = 4;  // 河界在第4行（0索引）
             ctx.fillStyle = RIVER_BG;
             ctx.fillRect(margin, margin + riverY * cellSize, cellSize * (COLS - 1), cellSize);
             
