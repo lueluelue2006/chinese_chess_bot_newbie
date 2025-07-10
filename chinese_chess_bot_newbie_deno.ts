@@ -99,6 +99,160 @@ const HTML_TEMPLATE = `
             font-size: 1.3em;
         }
 
+        /* 选择界面样式 */
+        #selection-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.85);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 9999;
+            backdrop-filter: blur(5px);
+        }
+
+        #selection-container {
+            background: linear-gradient(135deg, #f5f5dc 0%, #e6d5b8 100%);
+            padding: 40px;
+            border-radius: 20px;
+            box-shadow: 0 10px 50px rgba(0, 0, 0, 0.5);
+            text-align: center;
+            max-width: 600px;
+            width: 90%;
+        }
+
+        #selection-title {
+            font-size: 2em;
+            color: #333;
+            margin-bottom: 40px;
+            font-weight: bold;
+            text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.1);
+        }
+
+        #selection-options {
+            display: flex;
+            gap: 60px;
+            justify-content: center;
+            flex-wrap: wrap;
+        }
+
+        .color-option {
+            cursor: pointer;
+            transition: transform 0.3s ease;
+            position: relative;
+        }
+
+        .color-option:hover {
+            transform: scale(1.1);
+        }
+
+        .big-piece {
+            width: 120px;
+            height: 120px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 80px;
+            font-weight: bold;
+            font-family: var(--piece-font);
+            background: var(--piece-bg);
+            background-image: radial-gradient(circle at 35% 35%, #ffffff, var(--piece-bg) 70%);
+            border: 3px solid;
+            box-shadow: 0 5px 20px rgba(0, 0, 0, 0.3),
+                inset 0 0 0 5px var(--piece-bg),
+                inset 0 0 0 8px var(--current-color);
+            margin: 0 auto 20px;
+            position: relative;
+            animation: float 3s ease-in-out infinite;
+        }
+
+        .big-piece.red {
+            color: var(--red-color);
+            border-color: var(--red-color);
+            --current-color: var(--red-color);
+        }
+
+        .big-piece.black {
+            color: var(--black-color);
+            border-color: var(--black-color);
+            --current-color: var(--black-color);
+        }
+
+        .color-option:hover .big-piece {
+            animation: pulse 0.6s ease-in-out infinite;
+        }
+
+        .color-label {
+            font-size: 1.5em;
+            font-weight: bold;
+            margin-top: 10px;
+        }
+
+        .color-option.red .color-label {
+            color: var(--red-color);
+        }
+
+        .color-option.black .color-label {
+            color: var(--black-color);
+        }
+
+        @keyframes float {
+            0%, 100% {
+                transform: translateY(0);
+            }
+            50% {
+                transform: translateY(-10px);
+            }
+        }
+
+        @keyframes pulse {
+            0%, 100% {
+                transform: scale(1);
+                box-shadow: 0 5px 20px rgba(0, 0, 0, 0.3),
+                    inset 0 0 0 5px var(--piece-bg),
+                    inset 0 0 0 8px var(--current-color);
+            }
+            50% {
+                transform: scale(1.05);
+                box-shadow: 0 8px 30px rgba(0, 0, 0, 0.4),
+                    inset 0 0 0 5px var(--piece-bg),
+                    inset 0 0 0 8px var(--current-color),
+                    0 0 50px var(--current-color);
+            }
+        }
+
+        /* 选择后的闪光效果 */
+        @keyframes flash {
+            0% {
+                opacity: 0;
+                transform: scale(0.5);
+            }
+            50% {
+                opacity: 1;
+            }
+            100% {
+                opacity: 0;
+                transform: scale(2);
+            }
+        }
+
+        .flash-effect {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            width: 100%;
+            height: 100%;
+            border-radius: 50%;
+            background: radial-gradient(circle, rgba(255, 255, 255, 0.8) 0%, transparent 70%);
+            transform: translate(-50%, -50%);
+            pointer-events: none;
+            animation: flash 0.6s ease-out;
+        }
+
         #info {
             font-size: 0.95em;
             font-weight: bold;
@@ -314,6 +468,23 @@ const HTML_TEMPLATE = `
     </style>
 </head>
 <body>
+    <!-- 选择界面 -->
+    <div id="selection-overlay">
+        <div id="selection-container">
+            <h2 id="selection-title">请选择您要执什么棋</h2>
+            <div id="selection-options">
+                <div class="color-option red" data-color="red">
+                    <div class="big-piece red">帅</div>
+                    <div class="color-label">执红先行</div>
+                </div>
+                <div class="color-option black" data-color="black">
+                    <div class="big-piece black">将</div>
+                    <div class="color-label">执黑后手</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <div id="game-wrapper">
         <div id="info-panel">
             <h1>中国象棋</h1>
@@ -495,6 +666,8 @@ const HTML_TEMPLATE = `
         let isAiThinking = false;
         let gameStateHistory = [];
         let aiColor = 'black';
+        let playerColor = 'red';
+        let isBoardFlipped = false;
         let moveHistory = [];
         let killerMoves = Array(10).fill(null).map(() => [null, null]);
         let historyTable = {};
@@ -528,6 +701,21 @@ const HTML_TEMPLATE = `
         const isRedSide = (y) => y >= 5;
         const isBlackSide = (y) => y <= 4;
         const copyBoard = (board) => board.map(row => [...row]);
+
+        // 视觉坐标与逻辑坐标转换（处理棋盘翻转）
+        const getVisualCoords = (x, y) => {
+            if (isBoardFlipped) {
+                return { x: 8 - x, y: 9 - y };
+            }
+            return { x, y };
+        };
+
+        const getLogicalCoords = (visualX, visualY) => {
+            if (isBoardFlipped) {
+                return { x: 8 - visualX, y: 9 - visualY };
+            }
+            return { x: visualX, y: visualY };
+        };
 
         // 棋盘设置
         function setupBoardDimensions() {
@@ -591,9 +779,10 @@ const HTML_TEMPLATE = `
             ctx.fillStyle = BOARD_BG_COLOR;
             ctx.fillRect(0, 0, canvasWidth, canvasHeight);
 
-            // 河界
+            // 河界（根据棋盘翻转调整）
+            const riverY = isBoardFlipped ? 5 : 4;
             ctx.fillStyle = RIVER_BG;
-            ctx.fillRect(margin, margin + 4 * cellSize, cellSize * (COLS - 1), cellSize);
+            ctx.fillRect(margin, margin + riverY * cellSize, cellSize * (COLS - 1), cellSize);
 
             ctx.strokeStyle = BOARD_LINE_COLOR;
             ctx.lineWidth = Math.max(1, Math.round(cellSize * 0.025 * dpr) / dpr);
@@ -605,7 +794,8 @@ const HTML_TEMPLATE = `
             ctx.textAlign = "center";
             ctx.textBaseline = "middle";
             const riverText = (cellSize < 35) ? "楚 河 漢 界" : "楚  河         漢  界";
-            ctx.fillText(riverText, margin + (cellSize * (COLS - 1)) / 2, margin + 4.5 * cellSize);
+            const riverTextY = margin + (riverY + 0.5) * cellSize;
+            ctx.fillText(riverText, margin + (cellSize * (COLS - 1)) / 2, riverTextY);
             ctx.restore();
 
             // 画网格线
@@ -645,20 +835,36 @@ const HTML_TEMPLATE = `
                           (cellSize * (COLS - 1)) + ctx.lineWidth, (cellSize * (ROWS - 1)) + ctx.lineWidth);
             ctx.restore();
 
-            // 九宫格
-            drawCross(3, 0, 5, 2); // 黑方
-            drawCross(3, 7, 5, 9); // 红方
+            // 九宫格（根据棋盘翻转调整）
+            if (isBoardFlipped) {
+                drawCross(3, 7, 5, 9); // 红方九宫格（在翻转后的上方）
+                drawCross(3, 0, 5, 2); // 黑方九宫格（在翻转后的下方）
+            } else {
+                drawCross(3, 0, 5, 2); // 黑方九宫格
+                drawCross(3, 7, 5, 9); // 红方九宫格
+            }
 
             // 炮位和兵位标记
             ctx.lineWidth = Math.max(0.8, Math.round(cellSize * 0.018 * dpr) / dpr);
-            drawMarker(1, 2);
-            drawMarker(7, 2);
-            drawMarker(1, 7);
-            drawMarker(7, 7);
+            
+            // 炮位标记（根据棋盘翻转调整）
+            if (isBoardFlipped) {
+                drawMarker(1, 7); drawMarker(7, 7);
+                drawMarker(1, 2); drawMarker(7, 2);
+            } else {
+                drawMarker(1, 2); drawMarker(7, 2);
+                drawMarker(1, 7); drawMarker(7, 7);
+            }
 
+            // 兵位标记
             for (let i = 0; i <= 8; i += 2) {
-                drawMarker(i, 3, i > 0, i < COLS - 1);
-                drawMarker(i, 6, i > 0, i < COLS - 1);
+                if (isBoardFlipped) {
+                    drawMarker(i, 6, i > 0, i < COLS - 1);
+                    drawMarker(i, 3, i > 0, i < COLS - 1);
+                } else {
+                    drawMarker(i, 3, i > 0, i < COLS - 1);
+                    drawMarker(i, 6, i > 0, i < COLS - 1);
+                }
             }
         }
 
@@ -705,27 +911,30 @@ const HTML_TEMPLATE = `
 
             // 上一步移动标记
             if (lastMove) {
+                const fromPos = getVisualCoords(lastMove.fromX, lastMove.fromY);
                 const indicator = document.createElement('div');
                 indicator.className = 'last-move-indicator';
-                indicator.style.left = \`\${margin + lastMove.fromX * cellSize}px\`;
-                indicator.style.top = \`\${margin + lastMove.fromY * cellSize}px\`;
+                indicator.style.left = \`\${margin + fromPos.x * cellSize}px\`;
+                indicator.style.top = \`\${margin + fromPos.y * cellSize}px\`;
                 piecesLayer.appendChild(indicator);
 
+                const toPos = getVisualCoords(lastMove.toX, lastMove.toY);
                 const toIndicator = document.createElement('div');
                 toIndicator.className = 'last-move-indicator to-indicator';
-                toIndicator.style.left = \`\${margin + lastMove.toX * cellSize}px\`;
-                toIndicator.style.top = \`\${margin + lastMove.toY * cellSize}px\`;
+                toIndicator.style.left = \`\${margin + toPos.x * cellSize}px\`;
+                toIndicator.style.top = \`\${margin + toPos.y * cellSize}px\`;
                 piecesLayer.appendChild(toIndicator);
             }
 
             // 可能的移动点
             if (!isAiThinking) {
                 possibleMoves.forEach(move => {
+                    const visualPos = getVisualCoords(move.x, move.y);
                     if (isEmpty(move.x, move.y)) {
                         const dot = document.createElement('div');
                         dot.classList.add('highlight-dot');
-                        dot.style.left = \`\${margin + move.x * cellSize}px\`;
-                        dot.style.top = \`\${margin + move.y * cellSize}px\`;
+                        dot.style.left = \`\${margin + visualPos.x * cellSize}px\`;
+                        dot.style.top = \`\${margin + visualPos.y * cellSize}px\`;
                         dot.onclick = (event) => {
                             event.stopPropagation();
                             handleClick(move.x, move.y);
@@ -740,11 +949,12 @@ const HTML_TEMPLATE = `
                 for (let x = 0; x < COLS; x++) {
                     const pieceCode = boardData[y][x];
                     if (pieceCode) {
+                        const visualPos = getVisualCoords(x, y);
                         const pieceDiv = document.createElement('div');
                         pieceDiv.className = \`piece \${COLOR_MAP[pieceCode[0]]}\`;
                         pieceDiv.textContent = PIECE_MAP[pieceCode];
-                        pieceDiv.style.left = \`\${margin + x * cellSize}px\`;
-                        pieceDiv.style.top = \`\${margin + y * cellSize}px\`;
+                        pieceDiv.style.left = \`\${margin + visualPos.x * cellSize}px\`;
+                        pieceDiv.style.top = \`\${margin + visualPos.y * cellSize}px\`;
 
                         if (!isAiThinking) {
                             if (selectedPiece && selectedPiece.x === x && selectedPiece.y === y) {
@@ -809,9 +1019,9 @@ const HTML_TEMPLATE = `
             redGeneralPos = { x: 4, y: 9 };
             blackGeneralPos = { x: 4, y: 0 };
             gameStateHistory = [];
-            moveHistory = []; // Reset move history
-            killerMoves = Array(10).fill(null).map(() => [null, null]); // Reset killer moves
-            historyTable = {}; // Reset history table
+            moveHistory = [];
+            killerMoves = Array(10).fill(null).map(() => [null, null]);
+            historyTable = {};
             
             infoDiv.style.color = '#d53f3f';
             infoDiv.classList.remove('info-check');
@@ -821,9 +1031,32 @@ const HTML_TEMPLATE = `
             refreshBoard();
             
             // 如果AI执红先行
-            if (aiColor === 'red') {
+            if (aiColor === 'red' && currentPlayer === 'red') {
                 setTimeout(() => triggerAIMove(), 500);
             }
+        }
+
+        // 处理玩家颜色选择
+        function handleColorSelection(color) {
+            const selectionOverlay = document.getElementById('selection-overlay');
+            const selectedOption = document.querySelector(\`.color-option.\${color}\`);
+            const selectedPiece = selectedOption.querySelector('.big-piece');
+            
+            // 添加闪光效果
+            const flash = document.createElement('div');
+            flash.className = 'flash-effect';
+            selectedPiece.appendChild(flash);
+            
+            // 设置游戏状态
+            playerColor = color;
+            aiColor = color === 'red' ? 'black' : 'red';
+            isBoardFlipped = (playerColor === 'black');
+            
+            // 延迟移除选择界面并开始游戏
+            setTimeout(() => {
+                selectionOverlay.style.display = 'none';
+                initGame();
+            }, 600);
         }
 
         // 点击处理
@@ -1636,7 +1869,9 @@ const HTML_TEMPLATE = `
 
         resetButton.addEventListener('click', () => {
             if (isAiThinking) return;
-            initGame();
+            // 显示选择界面
+            const selectionOverlay = document.getElementById('selection-overlay');
+            selectionOverlay.style.display = 'flex';
         });
 
         undoButton.addEventListener('click', () => {
@@ -1649,7 +1884,18 @@ const HTML_TEMPLATE = `
 
         // 初始化游戏
         document.addEventListener('DOMContentLoaded', () => {
-            initGame();
+            // 添加颜色选择事件监听器
+            const colorOptions = document.querySelectorAll('.color-option');
+            colorOptions.forEach(option => {
+                option.addEventListener('click', () => {
+                    const color = option.getAttribute('data-color');
+                    handleColorSelection(color);
+                });
+            });
+            
+            // 不立即初始化游戏，等待玩家选择
+            setupBoardDimensions();
+            drawBoard();
         });
 
         window.addEventListener('load', () => {
